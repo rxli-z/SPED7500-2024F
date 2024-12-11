@@ -1,0 +1,689 @@
+---
+title: "Final Data Analysis"
+author: "RL"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    number_sections: true
+    toc: true
+  pdf_document: default
+editor_options:
+  markdown:
+    wrap: sentence
+---
+
+# Introduction
+
+Family involvement in schools plays a pivotal role in addressing the developmental and educational needs of students, particularly in organizing support systems tailored to these needs.
+Understanding the underlying constructs that shape educational processes is critical for evaluating how effectively schools allocate and deliver support to students with diverse needs (Epstein, 2010).
+For example, family involvement has long been recognized as a key factor in improving student outcomes, including higher academic achievement (e.g., Patall et al., 2008; Hill & Tyson, 2009; Jeynes, 2012), better grade-point averages (e.g., Camarero-Figuerola et al., 2020; Dotterer & Wehrspann, 2016), and reduced dropout rates (e.g., DeWitt et al., 2013; Ziomek-Daigle, 2010).
+Importantly, the positive effects of family involvement extend beyond academic performance, contributing to better behavioral regulation (e.g., Pears et al., 2015) and enhanced social skills (e.g., Van Voorhis et al., 2013).
+These benefits are evident across diverse student groups, regardless of variations in ability, race and ethnicity, socioeconomic status, or grade level (Driessen et al., 2005; Hill & Tyson, 2009; Benner et al., 2016; Jeynes, 2012).
+
+Epstein's (1987) framework on family involvement categorizes engagement into four key types: caregiver obligation, school-home communication, school engagement, and home-based learning activities.
+However, while comprehensive, Epstein's framework does not fully capture the distinct needs of students requiring varied levels of support, including those with disabilities.
+Students with disabilities often necessitate additional layers of engagement, such as specialized family involvement and collaboration frameworks mandated by the Individuals with Disabilities Education Act (IDEA, 2004).
+Recognizing these nuanced needs, Haines and colleagues (2017) introduced the Sunshine Model, which emphasizes family-professional partnerships over traditional involvement paradigms.
+This model incorporates seven core principles---communication, respect, professional competence, commitment, equality, advocacy, and trust---aimed at fostering effective partnerships and addressing the needs of diverse student populations, including those with disabilities.
+
+The Sunshine Model's emphasis on family-professional partnerships aligns with the evolving needs of modern educational systems, particularly frameworks like Multi-Tiered Systems of Support (MTSS).
+MTSS organizes students into tiers based on their support needs (Tier 1: minimal for mainstream students, Tier 2: targeted for at-risk students, and Tier 3: intensive for referring students to special education), requiring schools to assess not just student outcomes but the partnerships and demographic factors that influence placement into these tiers.
+While Epstein's framework provides valuable insights, its limited overlap with the Sunshine Model (primarily in communication) highlights a need for evidence-based models that address the multidimensional relationship between family-professional partnerships and student support needs.
+This study bridges this gap by exploring how family-professional partnerships and other key factors (i.e., demographic and student learning characteristics) predict student placement in MTSS tiers and identifying the clusters that reflect these levels of support.
+
+Research Questions:
+
+1.  How well do clusters derived from data-driven dimensions reflect student types based on their support needs (MTSS tiers 1, 2, or 3) in terms of demographic, student-level, and family-professional partnership factors?
+
+2.  How accurate are clusters derived from data-driven dimensions in predicting student types based on their support needs (MTSS tiers 1, 2, or 3)?
+
+# Data
+
+The National Household Education Surveys Program (NHES), the primary household survey initiative of the National Center for Education Statistics (NCES) under the Institute of Education Sciences (IES), gathers nationally representative data that provides insight into the educational experiences of children and families across the United States.
+These surveys are conducted every three to four years and cover a range of topics related to early childhood care and education, family engagement in schools, and homeschooling.
+The data used in this specific analysis comes from the Parent and Family Involvement in Education Survey, which provides comprehensive information on family and child demographics, family-professional partnership factors, and student outcomes as reported by a sample of \~16,000 families surveyed in 2019.
+In this dataset, the students in these families were on average 12.1 years old (*SD* = 3.8)-equally distributed across grades K-12, with \~56% identifying as white (non-Hispanic), \~52% as male, and \~97% attending public, private, or charter schools.
+The households on average had 4.1 members (*SD* = 1.3), with \~60% of the respondents identifying as the students' mothers, and normal distributions shown for both total income as well as highest educational attainment.
+The initial setup of this complete dataset as retrieved from IES is outlined below.
+
+```{r setup, include=FALSE}
+# Load libraries
+library(tidyverse)
+library(polycor)
+library(ggplot2)
+library(reshape2)
+library(EGAnet)
+library(factoextra)
+library(NbClust)
+library(cluster)
+library(nnet)
+library(glmnet)
+library(caret)
+```
+
+```{r, warning=FALSE, message=FALSE}
+# Load the dataset
+pfi_data <- read_csv("pfi_data.csv")
+
+# Inspect the structure of the dataset
+glimpse(pfi_data[, c(1:10, (ncol(pfi_data)-9):ncol(pfi_data))])
+```
+
+```{r, warning=FALSE, message=FALSE}
+# Calculate Demographic Characteristics
+options(digits = 4) #set outputs limited to 3 decimal places
+options(scipen = 999) #disable scientific notation
+
+## Means and SDs
+summary_stats <- c(mean_cage = mean(pfi_data$AGE2018), #child's age
+                   sd_cage = sd(pfi_data$AGE2018),
+                   mean_hht = mean(pfi_data$HHTOTALXX), #total household members
+                   sd_hht = sd(pfi_data$HHTOTALXX))
+summary_stats
+
+## Recoding Categorical Variables
+pfi_data <- pfi_data %>%
+  mutate(S19TYPE = recode(S19TYPE, '-9' = NA_character_, '-1' = "Homeschool", 
+                          '1' = "Catholic", '2' = "Religious", '3' = "Nonsec", 
+                          '4' = "Public")) %>%
+  mutate(ALLGRADEX = recode(ALLGRADEX, '2' = "G0K", '3' = "G0K", '4' = "G1", 
+                            '5' = "G2", '6' = "G3", '7' = "G4", '8' = "G5", 
+                            '9' = "G6", '10' = "G7", '11' = "G8", '12' = "G9", 
+                            '13' = "G510", '14' = "G11", '15' = "G12")) %>%
+  mutate(CSEX2 = recode(CSEX, '1' = "Male", '2' = "Female")) %>%
+  mutate(RACEETH = factor(recode(RACEETH, '1' = "White", '2' = "Black", 
+                                 '3' = "Hispanic", '4' = "Asian", 
+                                 '5' = "Other"))) %>%
+  mutate(RELATION = recode(RELATION, '1' = "Mother", '2' = "Father", 
+                           '3' = "Aunt", '4' = "Uncle", '5' = "Grandmother", 
+                           '6' = "Grandfather", '7' = "Other", '8' = "Other", 
+                           '9' = "Sibling", '10' = "Other", '11' = "Other")) %>%
+  mutate(PARGRADEX2 = recode(PARGRADEX, '1' = "E1Below_HS", '2' = "E2HS_Dip", 
+                             '3' = "E3Voc", '4' = "E4College", '5' = "E5Grad")) %>%
+  mutate(TTLHHINC2 = recode(TTLHHINC, '1' = "K010", '2' = "K020", '3' = "K030", 
+                            '4' = "K040", '5' = "K050", '6' = "K060", 
+                            '7' = "K075", '8' = "K100", '9' = "K150", 
+                            '10' = "K200", '11' = "K250", '12' = "K999"))
+
+## Distributions by percent
+prop.table(table(pfi_data$S19TYPE)) * 100 #school type
+prop.table(table(pfi_data$ALLGRADEX)) * 100 #grade level
+prop.table(table(pfi_data$CSEX2)) * 100 #child sex
+prop.table(table(pfi_data$RACEETH)) * 100 #child's race
+prop.table(table(pfi_data$RELATION)) * 100 #respondent's relation
+prop.table(table(pfi_data$PARGRADEX2)) * 100 #respondent's education
+prop.table(table(pfi_data$TTLHHINC2)) * 100 #household income
+```
+
+## Variables
+
+### Demographic Factors
+
+RACEETH. For this item, parents were asked to identify their race and ethnicity.
+Response options include: (1) White, non-Hispanic; (2) Black, non-Hispanic; (3) Hispanic; (4) Asian or Pacific Islander; and (5) All other races and multiple races.
+
+CSEX. For this item, parents were asked the question: "*What is this child's sex?*" Response options included: (1) Male and (2) Female.
+
+HHTOTALXX. For this item, parents were asked the question: "*Including children, how many people live in this household?*" and were able to input a numeric value.
+
+TTLHHINC. For this item, parents were asked the question: "*Which category best fits the total income of all persons in your household over the past 12 months?*" Response options include: (1) \$0 to \$10,000; (2) \$10,001 to \$20,000; (3) \$20,001 to \$30,000; (4) \$30,001 to \$40,000; (5) \$40,001 to \$50,000; (6) \$50,001 to \$60,000; (7) \$60,001 to \$75,000; (8) \$75,001 to \$100,000; (9) \$100,001 to \$150,000; (10) \$150,001 to \$200,000; (11) \$200,001 to \$250,000; and (12) \$250,001 or more.
+
+PARGRADEX. For this item, parents were asked the question: "*What is the highest grade or level of school that this parent or guardian completed?*" Response options include: (1) Less than high school credential; (2) High school graduate or equivalent; (3) Vocational/technical education after high school or some college; (4) College graduate; and (5) Graduate or professional school.
+
+### Student-Level Factors
+
+CENGLPRG. For this item, parents were asked the question: "*Is this child currently enrolled in English as a second language, bilingual education, or an English immersion program?*" Response options included: (-1) Valid Skip; (1) Yes; and (2) No.
+
+DSBLTY. For this item, parents were asked to indicate if their child currently has disability.
+Response options included: (1) Currently has a disability; and (2) Does not currently have a disability.
+
+HDIEPX. For this item, parents were asked the question: "*Is this child receiving any services through an Individualized Education Program (IEP) or services plan?*" Response options included: (-1) Valid Skip; (1) Yes; and (2) No.
+
+SEGRADES. For this item, parents were asked the question: "*Please tell us about this child's grades during this school year. Overall, across all subjects, what grades does this child get?*" Response options included: (-1) Valid Skip; (1) Mostly A's; (2) Mostly B's; (3) Mostly C's; (4) Mostly D's; and (5) School does not give these grades.
+
+SEGRADEQ. For this item, parents were asked the question: "*How would you describe his or her work at school?*" Response options included: (-1) Valid Skip; (1) Excellent; (2) Above average; (3) Average; (4) Below average; and (5) Failing.
+
+SEABSNT. For this item, parents were asked the question: "*Since the beginning of this school year, how many days has this child been absent from school?*" Response options included: (-1) Valid Skip; (1) 0 to 5 days; (2) 6 to 10 days; (3) 11 to 20 days; and (4) More than 20 days.
+
+*For the next few items, parents were asked and were able to input numeric values for the question: "Since the beginning of this school year, how many times have any of this child's teachers or school staff contacted your household about:"*
+
+SESCHWRK. Problems this child is having with school work?\
+SEGWORK.
+Very good school work?\
+SEBEHAVX.
+Behavior problems this child is having in school?\
+SEGBEHAV.
+Very good behavior?
+
+*For the next few items, parents were asked: "Has this child ever had the following experiences?" Response options included: (-1) Valid Skip; (1) Yes; and (2) No.*
+
+SESUSOUT. An out-of-school suspension.\
+SESUSPIN.
+An in-school suspension not counting detentions.\
+SEEXPEL.
+Been expelled from school.
+
+### Family-Professional Partnership Factors
+
+FHCHECKX. For this item, parents were asked the question: "*How often does any adult in your household check to see that this child's homework is done?*" Response options included: (-1) Valid Skip; (1) Never; (2) Rarely; (3) Sometimes; and (4) Always.
+
+FHHELP. For this item, parents were asked the question: "*During this school year, about how many days in an average week does anyone in your household help this child with his or her homework?*" Response options included: (-1) Valid Skip; (1) Less than once a week; (2) 1 to 2 days a week; (3) 3 to 4 days a week; (4) 5 or more days a week; and (5) Never.
+
+FSFREQ. For this item, parents were asked the question: "*During this school year, how many times has any adult in the household gone to meetings or participated in activities at this child's school?*" and were able to input a numeric value.
+
+*For the next few items, parents were asked: "How well has this child's school been doing the following things during this school year?" Response options included: (-1) Valid Skip; (1) Very well; (2) Just okay; (3) Not very well; and (4) Does not do it at all.*
+
+FSSPPERF. Letting you know how this child is doing in school between report cards.\
+FSSPHW.
+Providing information about how to help this child with homework.\
+FSSPCOUR.
+Providing information about why this child is placed in particular groups or classes.\
+FSSPROLE.
+Providing information on your expected role at this child's school.
+
+*For the next few items, parents were asked: "How satisfied or dissatisfied are you with each of the following:" Response options included: (-1) Valid Skip; (1) Very satisfied; (2) Somewhat satisfied; (3) Somewhat dissatisfied; and (4) Very dissatisfied.*
+
+FCSCHOOL. The school this child attends this year?\
+FCTEACHR.
+The teachers this child has this year?\
+FCSTDS.
+The academic standards of the school?\
+FCORDER.
+The order and discipline at the school?\
+FCSUPPRT.
+The way that school staff interacts with parents?
+
+*For the next few items, parents were asked: "Since the beginning of this school year, has any adult in this child's household done any of the following things at this child's school?" Response options included: (-1) Valid Skip; (1) Yes; and (2) No.*
+
+FSSPORTX. Attended a school or class event, such as a play, dance, sports event, or science fair.\
+FSVOL.
+Served as a volunteer in this child's classroom or elsewhere in the school.\
+FSMTNG.
+Attended a general school meeting, for example, an open house, or a back-to-school night.\
+FSPTMTNG.
+Attended a meeting of the parent-teacher organization or association.\
+FSATCNFN.
+Gone to a regularly scheduled parent-teacher conference with this child's teacher.\
+FSFUNDRS.
+Participated in fundraising for the school.\
+FSCOMMTE.
+Served on a school committee.
+
+# Data Wrangling
+
+The data wrangling process involved selecting relevant variables across categories such as demographics, student-level, and family-professional partnership factors.
+Variables indicating skipped responses (-1) were recoded to standardize "no" responses, and rows containing any skipped data were removed.
+Ordinal variables were re-coded to ensure higher values indicated better outcomes, while dichotomous variables were re-coded to binary format (0 and 1).
+Specific adjustments were made to variables (i.e., academic performance) to align with consistent scales.
+The cleaned dataset was checked for structure and integrity to ensure it was ready for further analysis.
+
+```{r, warning=FALSE, message=FALSE}
+# Select only relevant variables
+vars <- c("RACEETH", "CSEX", "HHTOTALXX", "TTLHHINC", "PARGRADEX", #demographic
+          "DSBLTY", "CENGLPRG", "HDIEPX", #student learning needs
+          "SESCHWRK", "SEGWORK", "SEGRADES", "SEGRADEQ", #student academics
+          "SEBEHAVX", "SEGBEHAV", "SEABSNT", "SESUSOUT", 
+          "SESUSPIN", "SEEXPEL", #student behavior
+          "FSNOTESX", "FSMEMO", "FSPHONCHX", "FSSPPERF", 
+          "FSSPHW", "FSSPCOUR", "FSSPROLE", #fpp communication
+          "FCSCHOOL", "FCTEACHR", "FCSTDS", "FCORDER", 
+          "FCSUPPRT", #fpp satisfaction
+          "FSATCNFN", "FSCOUNSLR", 
+          "FHCHECKX", "FHHELP", #fpp educational involvement
+          "FSSPORTX", "FSVOL", "FSMTNG", "FSPTMTNG", 
+          "FSFUNDRS", "FSCOMMTE", "FSFREQ" #fpp school involvement
+          )
+
+# Subset the data to include only relevant variables
+pfi_data <- pfi_data %>% 
+  select(all_of(vars)) %>%
+  mutate(CENGLPRG = recode(CENGLPRG, `-1` = 2)) %>% 
+  #recode branch items so skip becomes no
+  mutate(HDIEPX = recode(HDIEPX, `-1` = 2)) %>% 
+  #recode branch items so skip becomes no
+  filter(if_all(everything(), ~ . != -1)) 
+  #remove rows where any selected variable is -1 or Valid Skips
+
+# Re-code variables
+recode_ord <- c("SEGRADES", "SEGRADEQ", "FSSPPERF", "FSSPHW", "FSSPCOUR", 
+                "FSSPROLE", "FCSCHOOL", "FCTEACHR", "FCSTDS", "FCORDER", 
+                "FCSUPPRT") #ordinal variables
+
+recode_dic <- c("CSEX", "DSBLTY", "CENGLPRG", "HDIEPX", "SESUSOUT", 
+                "SESUSPIN", "SEEXPEL", "FSNOTESX", "FSMEMO", "FSPHONCHX", 
+                "FSATCNFN", "FSCOUNSLR", "FSSPORTX", "FSVOL", "FSMTNG", 
+                "FSPTMTNG", "FSFUNDRS", "FSCOMMTE") #dichotomous
+
+pfi_data_clean <- pfi_data %>%
+  mutate(across(all_of(recode_ord),
+                ~ recode(., `1` = 4, `2` = 3, `3` = 2, `4` = 1))) %>% 
+                #higher = better
+  mutate(across(all_of(recode_dic), ~ recode(., `2` = 0))) %>% #no's becomes 0s
+  mutate(SEGRADES = recode(SEGRADEQ, `5` = 0)) %>% #failing becomes 0s
+  mutate(FHHELP = recode(FHHELP, `5` = 0)) #never becomes 0s
+
+#Check Data
+glimpse(pfi_data_clean)
+```
+
+# Multicollinearity Check
+
+```{r, warning=FALSE, message=FALSE}
+# Correlations
+cor_matrix <- hetcor(as.data.frame(pfi_data_clean))$correlations
+
+# Reshape correlation matrix into long format
+cor_matrix_long <- melt(cor_matrix)
+
+# Add a column for significance
+cor_matrix_long$Significance <- ifelse(abs(cor_matrix_long$value) > 0.7, "*", "")
+
+# Plot the heatmap
+cor_heatmap <- ggplot(cor_matrix_long, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1, 1), space = "Lab") +
+  geom_text(aes(label = Significance), color = "black", size = 3) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 8),
+        axis.title = element_blank()) +
+  labs(title = "Correlation Heatmap", fill = "Correlation")
+cor_heatmap
+
+# Remove highly correlated
+pfi_data_clean <- pfi_data_clean %>%
+  select(-SEGRADES, -SEGWORK, -FCSTDS)
+```
+
+# Dimension Reduction
+
+Exploratory Graph Analysis (EGA) utilizes network-based methodologies to explore data structures by identifying clusters of highly correlated variables, which can be indicative of underlying components (Golino & Epskamp, 2017).
+In conducting EGA, employing techniques like regularization and ensuring generalizability are crucial steps to derive reliable and meaningful insights from complex datasets.
+Regularization, through Graphical LASSO (GLASSO), is vital for managing the dimensionality and sparsity of the network models generated during EGA (Epskamp & Fried, 2018).
+This method allows the controlling for overfitting by penalizing the inclusion of less significant connections, thus helping to uncover the most influential relationships in the data.
+Generalizability can be ensured through bootstrapping, a technique that assesses the stability and reliability of the network by repeatedly sampling the data with replacement (Christensen & Golino, 2021b).
+
+Specifically, the current process of dimension reduction was conducted through a three-step process.
+Utilizing the EGAnet (Golino & Christensen, 2024a) package in R, Unique Variable Analysis (UVA) was first applied to the data to prevent local dependence between the variables and reduce redundancy (Christensen et al., 2023a).
+For UVA, the default method of retaining the variable with the lowest maximum weighted topological overlap (wTO) to all other variables was utilized.
+Next, EGA with optimal model fit (vs. standard EGA) was conducted using the default network estimation method of GLASSO because of the polytomous nature and number of variables in the dataset (Jamison et al., 2021).
+The community detection algorithm, '*leiden*', was utilized due to the unequal number of variables that was expected per theoretical constructs (Christensen et al., 2023b).
+Lastly, bootstrapping was conducted on the best fitting model by specifying the 'bootEGA()' function alongside 'EGA.fit()' which performs EGA across the default (500) replicated bootstrap samples, with the aggregated bootstrapped model compared to the empirical model based on the original data.
+
+To compare between the EGAs resulting from the community detection algorithms, model fit was assessed via the Total Entropy Fit Index (TEFI) which has been validated in simulation studies to be as accurate or more accurate than traditional fit indices (e.g., CFI, RMSEA, SRMR; Golino et al., 2020).
+Network loadings, akin to factor loadings in Principal Component Analysis (PCA), were calculated to determine how adequately the variables align with their suggested dimension.
+Acceptable cutoff values were determined based on the commonly proposed value of .4 for factor loading in PCA, which is analogous to a value of .2 in terms of network loading (Christensen et al., 2024).
+Stability values for the bootstrapped models were evaluated on proposed guideline values (\>.75; Christensen & Golino, 2021b).
+
+```{r}
+# Perform UVA
+pfi_uva <- UVA(pfi_data_clean)
+pfi_uva
+
+# Estimate EGA
+pfi_fit <- EGA.fit(data = pfi_uva$reduced_data, algorithm = "leiden")
+summary(pfi_fit)
+
+# Compute Node Strength
+pfi_loadings <- net.loads(pfi_fit, loading.method = "experimental") 
+summary(pfi_loadings) 
+#network loading of .2 would generally equate to .4 in terms of PCA metrics
+
+# Remove low loading variables
+pfi_data_clean_load <- pfi_data_clean %>%
+  select(-HHTOTALXX, -CSEX, -SEGBEHAV, -SEABSNT, -FHHELP)
+
+# Redo UVA
+pfi_uva <- UVA(pfi_data_clean_load)
+pfi_uva
+
+# Redo EGA
+pfi_fit <- EGA.fit(data = pfi_uva$reduced_data, algorithm = "leiden")
+summary(pfi_fit)
+
+# Compute New Node Strength
+pfi_loadings <- net.loads(pfi_fit, loading.method = "experimental")
+summary(pfi_loadings)
+
+# Bootstrap to check stability
+pfi_fit_boot <- bootEGA(data = pfi_uva$reduced_data, algorithm = "leiden", 
+                        EGA.type = "EGA.fit", seed = 123, 
+                        plot.itemStability = FALSE)
+dimensionStability(pfi_fit_boot)
+
+# Get Network (factor) Scores
+ega_net_scores <- net.scores(data = pfi_uva$reduced_data, pfi_fit, 
+                             loading.method = "experimental")
+
+# Rename columns to be more descriptive
+ega_net_scores <- as.data.frame(ega_net_scores$scores$std.scores) %>% 
+  #these scores are already standardized
+  rename(demographic = 1, studentchar = 2, satisfaction = 3, 
+         eduinvolvement = 4, schoolinv = 5)
+```
+
+# Cluster Analysis
+
+K-means clustering was utilized to group students based on their underlying characteristics derived from EGA network scores.
+This approach allowed for the identification of data-driven clusters that align with the organizational tiers of MTSS.
+The EGA network scores served as input variables, capturing dimensions relevant to student support needs.
+A total of three clusters were specified to correspond with the MTSS tiers, and the 'kmeans' function was employed to partition the data.
+To ensure robustness, the clustering was performed with 25 random starts, reducing the likelihood of converging to a local minimum.
+
+For visualization, the clustering results were plotted to display the partitioned data and centroids in a two-dimensional space.
+This visualization allowed for a clear assessment of cluster separation and determine alignment with the MTSS tier framework.
+
+```{r}
+# Perform K-means clustering
+set.seed(123)  # For reproducibility
+kmeans_result <- kmeans(ega_net_scores, centers = 3, nstart = 25)
+kmeans_result$size
+kmeans_result$centers
+
+# Visualize the clustering result
+fviz_cluster(kmeans_result, data = ega_net_scores)
+
+# Adding cluster into dataset
+MTSS <- kmeans_result$cluster
+pfi_data_final <- cbind(pfi_data_clean, as.data.frame(MTSS))
+```
+
+# Regression Analysis
+
+To develop a data-driven model predicting student type according to MTSS tiers, a multinomial regression framework with cross-validation and bidirectional stepwise feature selection was employed.
+The dataset was split into 70% training and 30% testing subsets.
+A seed was set for reproducibility, ensuring consistent division of training and test sets across analyses.
+The reference categories for the outcome variable (MTSS tiers) and the race/ethnicity predictor were redefined to "Cluster B" and "White," respectively, for interpretability.
+
+The training set was prepared using 10-fold cross-validation.
+In this method, the model iteratively used 90% of the training data for parameter estimation while holding out 10% for validation, rotating through all subsets to evaluate performance comprehensively.
+The stepwise feature selection, specified in both forward and backward directions, identified the most predictive variables (dimension components) for the outcome.
+This automated process dynamically included or excluded predictors to optimize model fit while avoiding overfitting.
+To evaluate performance, the trained model was then tested on the reserved 30% testing data.
+Predictions were generated for the test set, allowing for an assessment of the model's accuracy and generalizability.
+
+```{r}
+# Prepare data
+pfi_data_final_sc <- pfi_data_final %>% 
+  na.omit() %>% #ensure rows with NAs are removed
+  mutate(MTSS = as.factor(MTSS)) %>% #change outcome to factor
+  mutate(MTSS = recode(MTSS, '2' = "A", '3' = "B", '1' = "C")) %>%
+  mutate(MTSS = factor(MTSS, levels = c("A", "B", "C")))%>%
+  mutate_at(-c(1, 39), ~(scale(.) %>% as.vector))
+  #scale non-categorical variables so mean is zero and values are standardized
+  #as.vector ensures columns are vectors
+
+# Set seed for replication purposes
+set.seed(1234)
+
+pfi_data_final_sc <- cbind(pfi_data_final_sc, ega_net_scores)
+
+# Set Cluster B as reference for MTSS and White as reference for Race
+pfi_data_final_sc$MTSS <- relevel(pfi_data_final_sc$MTSS, ref = "B")
+pfi_data_final_sc$RACEETH <- relevel(pfi_data_final_sc$RACEETH, ref = "White")
+
+# Create new variable in tibble for division into training and test sets
+pfi_data_final_sc_t_t <- pfi_data_final_sc %>% 
+  mutate(id = row_number())
+
+# 70% of data as training set 
+train_set <- pfi_data_final_sc_t_t %>% 
+  sample_frac(0.70) #selects 70% of observations
+
+# 30% of data test set 
+test_set  <- anti_join(pfi_data_final_sc_t_t, train_set, by = 'id') 
+#anti_join, take remaining observations not in train_set
+
+# Remove unnecessary variables 
+train_set <- train_set[39:44]
+
+test_set <- test_set[39:44]
+```
+
+```{r echo=T, results='hide'}
+# Select features for training model
+model_train_pfi <- train(MTSS ~ .,
+                 data = train_set,
+                 method="multinom", #multinomial regression
+                 stepwise = TRUE, #step-wise
+                 direction="both", #both backwards and foward
+                 trControl = trainControl(method = "cv", number = 10)) 
+                 #cross validation with 10x/folds
+```
+
+```{r}
+# Training Results
+summary(model_train_pfi)
+model_train_pfi$finalModel
+
+# Extract coefficients and standard errors
+coef_matrix <- summary(model_train_pfi$finalModel)$coefficients
+se_matrix <- summary(model_train_pfi$finalModel)$standard.errors
+
+# Calculate z-scores and p-values
+z_scores <- coef_matrix / se_matrix
+p_values <- (1 - pnorm(abs(z_scores), 0, 1)) * 2  # Two-tailed p-values
+
+# Combine values together into dataframe
+train_pfi_descrip <- as.data.frame(t(round(coef_matrix, 3))) %>%
+  rename_with(~ paste0("Coef_", rownames(coef_matrix)), everything()) %>%
+  bind_cols(as.data.frame(t(round(se_matrix, 3))) %>%
+              rename_with(~ paste0("SE_", rownames(se_matrix)), everything())) %>%
+  bind_cols(as.data.frame(t(round(p_values, 3))) %>%
+              rename_with(~ paste0("P_", rownames(p_values)), everything())) %>%
+  rownames_to_column("Predictor")
+
+# View the final model descriptive stats
+train_pfi_descrip
+
+# Evaluate the model performance on the test data
+test_predictions <- predict(model_train_pfi, newdata = test_set)
+```
+
+# Prediction Performance
+
+The predictive performance of the multinomial logistic regression model was evaluated using a confusion matrix and a mosaic plot.
+Actual MTSS tier values from the test data and predicted values from the final model were recoded into numeric variables and converted into factors for analysis.
+The confusion matrix summarized performance metrics, including accuracy, sensitivity, and precision, providing detailed insights into the model’s classification abilities.
+Visualization was employed via a mosaic plot which compared actual and predicted classifications, with cell size and color indicating agreement and misclassification patterns.
+
+```{r, warning=FALSE, message=FALSE}
+# Add and recode predicted values in tibble
+test_set_pred <- test_set %>% 
+  mutate (predicted = test_predictions) %>% #add in predicted vector
+  mutate(act_num = ifelse(MTSS == "A", 1,
+         ifelse(MTSS == "B", 2, 3))) %>%  #numeric var for actual MTSS
+  mutate(pred_num = ifelse(predicted == "A", 1,
+         ifelse(predicted == "B", 2, 3))) %>%  #numeric var for predicted MTSS
+  mutate_at(c("act_num", "pred_num"), as.factor) #factor for confusion matrix
+
+# Check the data
+glimpse(test_set_pred)
+table(test_set_pred$act_num)
+```
+
+```{r, warning=FALSE, message=FALSE}
+# create confusion matrix using CARET
+confusionMatrix(test_set_pred$act_num, test_set_pred$pred_num,
+                mode = "everything", #reported stats
+                positive="1")
+```
+
+```{r, warning=FALSE, message=FALSE}
+# Create table with actual and predicted values
+mosaic_table <- table(test_set_pred$act_num, test_set_pred$pred_num)
+mosaic_table #check table
+
+# simple mosaic plot
+mosaicplot(mosaic_table,
+           main = "Confusion matrix for multinomial regression", #title
+           sub = "Accuracy of prediction", #description
+           xlab = "Predicted", #x axis label
+           ylab = "Actual", #y axis label
+           color = c("blue4", "purple4", "hotpink4"),
+           border = "black")
+```
+
+# Descriptive Statistics
+
+Descriptive statistics of demographic, student-level, and family-professional partnership variables grouped by MTSS tiers in terms of the mean and standard deviation were calculated.
+
+```{r message=FALSE, warning=FALSE}
+# Recode Cluster into MTSS Tiers
+pfi_data_final_sc <- pfi_data_final_sc %>% 
+  mutate(MTSS = recode(MTSS, 'A' = "T1", 'B' = "T2", 'C' = "T3")) %>%
+  mutate(MTSS = factor(MTSS, levels = c("T1", "T2", "T3")))
+
+# Generate descriptive statistics
+summary_stats <- pfi_data_final_sc[2:39] %>%
+  group_by(MTSS) %>%  # Group by MTSS tiers
+  summarise(across(everything(), 
+                   list(mean = ~ round(mean(. , na.rm = TRUE), 3),
+                        sd = ~ round(sd(. , na.rm = TRUE), 3)))) %>%
+  pivot_longer(cols = -MTSS,  # Transform variables into a long format
+               names_to = c("Variable", ".value"), 
+               names_sep = "_") %>%
+  pivot_wider(names_from = MTSS, 
+              values_from = c(mean, sd), 
+              names_glue = "{MTSS}_{.value}") %>%
+  ungroup()
+
+# Reorder columns for better structure
+summary_stats <- summary_stats %>%
+  select(Variable, 
+         T1_mean, T1_sd, 
+         T2_mean, T2_sd, 
+         T3_mean, T3_sd)
+
+# View the output table
+summary_stats
+```
+
+# Example Interpretation of Results
+
+The descriptive results suggest the following insights for students in the at-risk category (Tier 2, the reference group) when evaluating the impact of the following demographic factors:
+
+1.  Parent Education Attainment (PARGRADEX)
+
+    -   Students whose parents have higher educational attainment are more prevalent in mainstream supports (Tier 1) and may highlight systemic inequities such that students from families with lower educational attainment are more likely to be at-risk (Tier 2) or referred for services (Tier 3).
+
+2.  Disability Status (DSBLTY)
+
+    -   Students with disabilities are overwhelmingly apparent in Tier 3, suggesting a direct relationship between having a disability and being referred for special education services.
+
+3.  English as Secondary Language (CENGLPRG)
+
+    -   Students with ESL status are most likely to be in Tier 2, reflecting language-related challenges that hinder success with mainstream supports alone and the need for additional targeted support.
+
+# References
+
+Aishworiya, R., Goh, T. J., Sung, M., & Tay, S. K. H.
+(2021).
+Correlates of adaptive skills in children with autism spectrum disorder.
+*Autism*, *25*(6), 1592-1600.
+
+Benner, A. D., Boyle, A. E., & Sadler, S.
+(2016).
+Parental involvement and adolescents' educational success: The roles of prior achievement and socioeconomic status.
+*Journal of youth and adolescence*, *45*, 1053-1064.
+
+Camarero-Figuerola, M., Dueñas, J. M., & Renta-Davids, A. I.
+(2020).
+The Relationship between Family Involvement and Academic Variables: A Systematic Review.
+*Research in Social Sciences and Technology*, *5*(2), 57-71.
+
+Carter, E. W., Lane, K. L., Pierson, M. R., & Glaeser, B.
+(2009).
+Self-determination skills and opportunities of transition-age youth with emotional disturbance and learning disabilities.
+*Exceptional Children*, *75*(4), 333--346.
+
+DeWitt, J., Osborne, J., Archer, L., Dillon, J., Willis, B., & Wong, B.
+(2013).
+Young children's aspirations in science: The unequivocal, the uncertain and the unthinkable.
+*International Journal of Science Education*, *35*(6), 1037-1063.
+
+Dotterer, A. M., & Wehrspann, E.
+(2016).
+Parent involvement and academic outcomes among urban adolescents: Examining the role of school engagement.
+*Educational Psychology*, *36*(4), 812--830.
+
+Driessen, G., Smit, F., & Sleegers, P. (2005).
+Parental involvement and educational achievement.
+*British Educational Research Journal*, *31*(4), 509-532.
+
+Epstein, J. L.
+(1987).
+Parent involvement: What research says to administrators.
+*Education and Urban Society*, *19*(2), 119-136.
+
+Epstein, J. L.
+(2010).
+School/family/community partnerships: Caring for the children we share.
+*Phi Delta Kappan*, *92*(3), 81-96.
+
+Fuchs, D., & Fuchs, L. S.
+(2006).
+Introduction to response to intervention: What, why, and how valid is it?
+*Reading Research Quarterly, 41*(1), 93--99.
+
+Haines, S.J., Francis, G.L., Mueller, T.G., Chiu, C.Y., Burke, M.M., Kyzar, K., Shepherd, K.G., Holdren, N., Aldersey, H.M.
+and Turnbull, A.P., 2017.
+Reconceptualizing family-professional partnership for inclusive schools: A call to action.
+*Inclusion*, *5*(4), 234-247.
+
+Hara, S. R., & Burke, D. J.
+(1998).
+Parent involvement: The key to improved student achievement.
+*School community journal*, *8*(2), 9-19.
+
+Hawley, W., & Rosenholtz, S.
+(1983).
+Educational strategies that increase student academic achievement.
+Prepared for the US Department of Education Office of Planning, Budget and Evaluation, Washington, DC.
+
+Hill, N. E., & Tyson, D. F.
+(2009).
+Parental involvement in middle school: a meta-analytic assessment of the strategies that promote achievement.
+*Developmental Psychology*, *45*(3), 740.
+
+Individuals with Disabilities Education Act, 20 U.S.C. § 1400 (2004).
+
+Jeynes, W.
+(2012).
+A meta-analysis of the efficacy of different types of parental involvement programs for urban students.
+*Urban Education*, *47*(4), 706-742.
+
+Patall, E. A., Cooper, H., & Robinson, J. C.
+(2008).
+Parent involvement in homework: A research synthesis.
+*Review of educational research*, *78*(4), 1039-1101.
+
+Pears, K. C., Kim, H. K., Healey, C. V., Yoerger, K., & Fisher, P. A.
+(2015).
+Improving child self-regulation and parenting in families of pre-kindergarten children with developmental disabilities and behavioral difficulties.
+*Prevention Science*, *16*, 222-232.
+
+Sheldon, S. B., & Van Voorhis, F. L.
+(2004).
+Partnership programs in U.S. schools: Their development and relationship to family involvement outcomes.
+*School Effectiveness and School Improvement*, *15*, 125--148.
+
+Turnbull, A. P., Turnbull, H. R., Erwin, E. J., Soodak, L. C., & Shogren, K. A.
+(2015).
+*Families, professionals, and exceptionality: Positive outcomes through partnerships and trust*.
+Pearson.
+
+Van Voorhis, F. L., Maier, M. F., Epstein, J. L., & Lloyd, C. M.
+(2013).
+A Focus on Literacy and Math Achievement Outcomes and Social-Emotional Skills.
+
+Walker, J. M. T., Hoover-Dempsey, K. V., Whetsel, D. R., & Green, C. L.
+(2004).
+Parental involvement in homework: A review of current research and its implications for teachers, after-school program staff, and parent leaders.
+*Harvard Family Research Project*.
+
+Ziomek-Daigle, J.
+(2010).
+Schools, families, and communities affecting the dropout rate: Implications and strategies for family counselors.
+*The Family Journal*, *18*(4), 377-385
